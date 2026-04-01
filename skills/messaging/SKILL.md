@@ -2,12 +2,31 @@
 
 You have access to Dispatch, a Slack and Discord integration for Claude Code.
 
-## When to activate
+## Mode 1: Morning Briefing Integration
 
-1. **Session briefing**: If `dispatch` data is present in SessionStart context, surface unread counts, mentions, and DM summaries.
-2. **Proactive capture**: Detect phrases like "message [person] in [channel]", "send [person] a DM", "post in #channel". Offer to compose via `/chat-send`. Always show the draft preview first — never send without explicit user confirmation.
-3. **Quick reply**: When the user is viewing messages, offer to reply inline. Use `/chat-send` with `--thread` and always confirm before sending.
-4. **On-demand**: User asks about message state, channels, unread counts, or presence.
+When the morning briefing protocol fires (MORNING_BRIEFING_TRIGGER in SessionStart context):
+
+The SessionStart hook already runs `dispatch briefing` via `session-context.sh` and injects the result into the session context. Check the session start output first — if Dispatch data is already present, do NOT re-fetch it.
+
+Surface the Dispatch section of the briefing as item 11 (Messaging) in the CLI output:
+- **Slack:** unread count by channel, mention count, DM count and snippets
+- **Discord:** unread count by channel (note: requires Gateway for full counts)
+- If no platforms are configured: "No platforms configured — run /chat-config --wizard."
+- If platforms are configured but API unavailable: show the warning from the hook output
+
+**The full briefing structure and section ordering is defined in `briefing_system.md` — do not use a different structure here. Dispatch's role is to supply messaging state to the briefing protocol.**
+
+## Mode 2: Proactive Capture
+
+Detect phrases like "message [person] in [channel]", "send [person] a DM", "post in #channel". Offer to compose via `/chat-send`. Always show the draft preview first — never send without explicit user confirmation.
+
+## Mode 3: Quick Reply
+
+When the user is viewing messages, offer to reply inline. Use `/chat-send` with `--thread` and always confirm before sending.
+
+## Mode 4: On-Demand
+
+User asks about message state, channels, unread counts, or presence.
 
 ## Safety rules
 
