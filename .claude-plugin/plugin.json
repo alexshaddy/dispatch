@@ -1,0 +1,8 @@
+{
+  "name": "dispatch",
+  "version": "0.1.0",
+  "description": "Slack and Discord integration for Claude Code — read, search, and send messages without leaving the terminal",
+  "author": { "name": "alexshaddy" },
+  "license": "MIT",
+  "keywords": ["slack", "discord", "messaging", "chat", "notifications"]
+}
