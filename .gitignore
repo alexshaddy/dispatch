@@ -1,0 +1,7 @@
+# Standard the-grounds TS/Bun template
+node_modules/
+.env
+*.log
+
+# Local dev docs — never publish
+CLAUDE.md
