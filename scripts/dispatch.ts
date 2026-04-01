@@ -766,3 +766,153 @@ async function generateBriefing(): Promise<void> {
   result.save_directory = config.save_directory;
   printJSON(result);
 }
+
+// =============================================================================
+// SECTION 9: Config Commands
+// =============================================================================
+
+function runConfig(args: string[]): void {
+  if (args.includes("--show")) {
+    if (!configExists()) exitWithError("not_configured", "Run chat-config --wizard to set up Dispatch.");
+    const config = loadConfig();
+    // Mask tokens before display
+    const display = JSON.parse(JSON.stringify(config)) as Config;
+    display.platforms.slack.token = maskToken(config.platforms.slack.token);
+    display.platforms.discord.token = maskToken(config.platforms.discord.token);
+    printJSON(display);
+    return;
+  }
+
+  if (args.includes("--reset")) {
+    if (!args.includes("--confirm")) {
+      exitWithError("not_configured", "--reset requires --confirm to prevent accidental token/config deletion.");
+    }
+    const { unlinkSync } = require("fs");
+    if (existsSync(CONFIG_FILE)) unlinkSync(CONFIG_FILE);
+    printJSON({ status: "reset", message: "Config wiped. Run chat-config --wizard to set up Dispatch." });
+    return;
+  }
+
+  const getIdx = args.indexOf("--get");
+  if (getIdx !== -1 && args[getIdx + 1]) {
+    if (!configExists()) exitWithError("not_configured", "Run chat-config --wizard to set up Dispatch.");
+    const config = loadConfig();
+    const key = args[getIdx + 1];
+    const parts = key.split(".");
+    let value: unknown = config;
+    for (const part of parts) value = (value as Record<string, unknown>)[part];
+    // Never surface token values
+    if (key.includes("token")) {
+      printJSON({ key, value: maskToken(String(value)) });
+    } else {
+      printJSON({ key, value });
+    }
+    return;
+  }
+
+  const setIdx = args.indexOf("--set");
+  if (setIdx !== -1 && args[setIdx + 1] && args[setIdx + 2]) {
+    if (!configExists()) exitWithError("not_configured", "Run chat-config --wizard to set up Dispatch.");
+    const config = loadConfig();
+    const key = args[setIdx + 1];
+    const rawValue = args[setIdx + 2];
+    const parts = key.split(".");
+    let target: Record<string, unknown> = config as unknown as Record<string, unknown>;
+    for (let i = 0; i < parts.length - 1; i++) {
+      target = target[parts[i]] as Record<string, unknown>;
+    }
+    const lastKey = parts[parts.length - 1];
+    const existing = target[lastKey];
+    if (typeof existing === "boolean") target[lastKey] = rawValue === "true";
+    else if (typeof existing === "number") target[lastKey] = parseFloat(rawValue);
+    else target[lastKey] = rawValue;
+    saveConfig(config);
+    const displayValue = key.includes("token") ? maskToken(rawValue) : target[lastKey];
+    printJSON({ status: "updated", key, value: displayValue });
+    return;
+  }
+
+  const enableIdx = args.indexOf("--enable");
+  if (enableIdx !== -1 && args[enableIdx + 1]) {
+    if (!configExists()) exitWithError("not_configured", "Run chat-config --wizard to set up Dispatch.");
+    const config = loadConfig();
+    const platform = args[enableIdx + 1] as "slack" | "discord";
+    if (platform !== "slack" && platform !== "discord") exitWithError("platform_not_specified", `Unknown platform: ${platform}`);
+    config.platforms[platform].enabled = true;
+    saveConfig(config);
+    printJSON({ status: "enabled", platform });
+    return;
+  }
+
+  const disableIdx = args.indexOf("--disable");
+  if (disableIdx !== -1 && args[disableIdx + 1]) {
+    if (!configExists()) exitWithError("not_configured", "Run chat-config --wizard to set up Dispatch.");
+    const config = loadConfig();
+    const platform = args[disableIdx + 1] as "slack" | "discord";
+    if (platform !== "slack" && platform !== "discord") exitWithError("platform_not_specified", `Unknown platform: ${platform}`);
+    config.platforms[platform].enabled = false;
+    saveConfig(config);
+    printJSON({ status: "disabled", platform });
+    return;
+  }
+
+  if (args.includes("--wizard")) {
+    ensureConfigDir();
+    const config = configExists()
+      ? (JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as Config)
+      : { ...DEFAULT_CONFIG, platforms: { slack: { ...DEFAULT_CONFIG.platforms.slack }, discord: { ...DEFAULT_CONFIG.platforms.discord } } };
+    saveConfig(config);
+    printJSON({
+      status: "wizard_complete",
+      message: "Dispatch configured. Use chat-config --set to adjust individual settings, or chat-config --enable slack/discord to enable platforms.",
+      note: "Set tokens with: chat-config --set platforms.slack.token xoxb-... and chat-config --enable slack",
+    });
+    return;
+  }
+
+  exitWithError("not_configured", "Unknown chat-config option. Try --wizard, --show, --get, --set, --enable, --disable, --reset --confirm");
+}
+
+// =============================================================================
+// SECTION 10: Main
+// =============================================================================
+
+const allArgs = process.argv.slice(2);
+const subcommand = allArgs[0];
+const subArgs = allArgs.slice(1);
+
+(async () => {
+  switch (subcommand) {
+    case "list":
+      await dispatchList(subArgs);
+      break;
+    case "read":
+      await dispatchRead(subArgs);
+      break;
+    case "send":
+      await dispatchSend(subArgs);
+      break;
+    case "search":
+      await dispatchSearch(subArgs);
+      break;
+    case "status":
+      await dispatchStatus(subArgs);
+      break;
+    case "config":
+      runConfig(subArgs);
+      break;
+    case "briefing":
+      await generateBriefing();
+      break;
+    case "--version":
+    case "-v":
+      printJSON({ version: VERSION });
+      break;
+    default:
+      process.stderr.write(JSON.stringify({
+        error: "unknown_command",
+        message: `Unknown subcommand: ${subcommand ?? "(none)"}. Available: list, read, send, search, status, config`,
+      }) + "\n");
+      process.exit(1);
+  }
+})();
