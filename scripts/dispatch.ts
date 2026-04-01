@@ -529,3 +529,240 @@ async function discordBriefing(token: string, guildIds: string[]): Promise<Recor
     note: "Discord unread counts require Gateway connection — deferred to future version.",
   };
 }
+
+// =============================================================================
+// SECTION 7: Unified Dispatch
+// =============================================================================
+
+function parseCommonArgs(args: string[]): {
+  platform: string | null;
+  channel: string | null;
+  limit: number | null;
+  unreadOnly: boolean | null;
+  threadId: string | null;
+  remaining: string[];
+} {
+  let platform: string | null = null;
+  let channel: string | null = null;
+  let limit: number | null = null;
+  let unreadOnly: boolean | null = null;
+  let threadId: string | null = null;
+  const remaining: string[] = [];
+
+  let i = 0;
+  while (i < args.length) {
+    if ((args[i] === "slack" || args[i] === "discord") && !platform) {
+      platform = args[i];
+    } else if (args[i] === "--limit" && args[i + 1]) {
+      limit = parseInt(args[++i]);
+    } else if (args[i] === "--unread") {
+      unreadOnly = true;
+    } else if (args[i] === "--no-unread") {
+      unreadOnly = false;
+    } else if (args[i] === "--thread" && args[i + 1]) {
+      threadId = args[++i];
+    } else if (args[i] === "--channel" && args[i + 1]) {
+      channel = args[++i];
+    } else {
+      remaining.push(args[i]);
+    }
+    i++;
+  }
+
+  return { platform, channel, limit, unreadOnly, threadId, remaining };
+}
+
+async function dispatchList(args: string[]): Promise<void> {
+  const config = loadConfig();
+  const { platform: platformArg, channel: channelArg, limit, unreadOnly, threadId, remaining } = parseCommonArgs(args);
+
+  const platform = resolvePlatform(platformArg, config);
+  const platformConfig = config.platforms[platform as "slack" | "discord"];
+
+  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled. Run chat-config --enable ${platform} and provide a token.`);
+  if (!platformConfig.token) exitWithError("platform_not_enabled", `Platform '${platform}' has no token configured. Run chat-config --wizard.`);
+
+  const channel = resolveChannel(channelArg ?? remaining[0] ?? null, platform, config);
+  const finalLimit = limit ?? config.default_limit;
+  const finalUnread = unreadOnly ?? config.default_unread_only;
+
+  if (platform === "slack") {
+    const messages = await slackList(platformConfig.token, channel, finalLimit, finalUnread, threadId ?? undefined);
+    printJSON(messages);
+  } else {
+    const messages = await discordList(platformConfig.token, channel, finalLimit, threadId ?? undefined);
+    printJSON(messages);
+  }
+}
+
+async function dispatchRead(args: string[]): Promise<void> {
+  const config = loadConfig();
+  const { platform: platformArg, remaining } = parseCommonArgs(args);
+
+  const platform = resolvePlatform(platformArg, config);
+  const platformConfig = config.platforms[platform as "slack" | "discord"];
+
+  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled.`);
+
+  const messageId = remaining[0];
+  if (!messageId) exitWithError("message_not_found", "Message ID is required. Usage: chat-read [platform] <message-id>");
+
+  if (platform === "slack") {
+    printJSON(await slackRead(platformConfig.token, messageId));
+  } else {
+    printJSON(await discordRead(platformConfig.token, messageId));
+  }
+}
+
+async function dispatchSend(args: string[]): Promise<void> {
+  const config = loadConfig();
+  const { platform: platformArg, channel: channelArgFlag, threadId, remaining } = parseCommonArgs(args);
+
+  const confirmed = args.includes("--confirmed");
+  const platform = resolvePlatform(platformArg, config);
+  const platformConfig = config.platforms[platform as "slack" | "discord"];
+
+  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled.`);
+
+  // Channel: either from --channel flag or first positional remaining arg
+  let channelArg = channelArgFlag ?? null;
+  let messageArgs = [...remaining];
+  if (!channelArg && messageArgs.length > 1) {
+    channelArg = messageArgs.shift()!;
+  }
+
+  const channel = resolveChannel(channelArg, platform, config);
+  const messageText = messageArgs.join(" ");
+
+  if (!messageText) exitWithError("send_failed", "Message text is required. Usage: chat-send [platform] [channel] <message>");
+
+  if (!confirmed) {
+    // Draft preview
+    printJSON({
+      status: "draft",
+      platform,
+      channel,
+      thread_id: threadId ?? null,
+      content: messageText,
+      send_as: { name: "Dispatch Bot", username: "dispatch" },
+    });
+    return;
+  }
+
+  if (platform === "slack") {
+    printJSON(await slackSend(platformConfig.token, channel, messageText, threadId ?? undefined));
+  } else {
+    printJSON(await discordSend(platformConfig.token, channel, messageText, threadId ?? undefined));
+  }
+}
+
+async function dispatchSearch(args: string[]): Promise<void> {
+  const config = loadConfig();
+  const { platform: platformArg, channel: channelArgFlag, limit, remaining } = parseCommonArgs(args);
+
+  let fromUser: string | null = null;
+  let dateFrom: string | null = null;
+  let dateTo: string | null = null;
+  let channelArg = channelArgFlag;
+  const pureRemaining: string[] = [];
+
+  let i = 0;
+  while (i < remaining.length) {
+    if (remaining[i] === "--from" && remaining[i + 1]) dateFrom = remaining[++i];
+    else if (remaining[i] === "--to" && remaining[i + 1]) dateTo = remaining[++i];
+    else if (remaining[i] === "--from-user" && remaining[i + 1]) fromUser = remaining[++i];
+    else pureRemaining.push(remaining[i]);
+    i++;
+  }
+
+  const platform = resolvePlatform(platformArg, config);
+  const platformConfig = config.platforms[platform as "slack" | "discord"];
+
+  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled.`);
+
+  const query = pureRemaining.join(" ");
+  if (!query) exitWithError("network_error", "Search query is required. Usage: chat-search [platform] <query> [--channel <name>]");
+
+  const finalLimit = limit ?? config.default_limit;
+
+  if (platform === "slack") {
+    printJSON(await slackSearch(platformConfig.token, query, channelArg ?? undefined, fromUser ?? undefined, dateFrom ?? undefined, dateTo ?? undefined, finalLimit));
+  } else {
+    printJSON(await discordSearch(platformConfig.token, query, channelArg ?? undefined, fromUser ?? undefined, finalLimit));
+  }
+}
+
+async function dispatchStatus(args: string[]): Promise<void> {
+  const config = loadConfig();
+  const { platform: platformArg, remaining } = parseCommonArgs(args);
+
+  const platform = resolvePlatform(platformArg, config);
+  const platformConfig = config.platforms[platform as "slack" | "discord"];
+
+  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled.`);
+
+  let setStatus: string | undefined;
+  let setEmoji: string | undefined;
+  let presence: string | undefined;
+  let clear = false;
+
+  let i = 0;
+  while (i < args.length) {
+    if (args[i] === "--set" && args[i + 1]) setStatus = args[++i];
+    else if (args[i] === "--emoji" && args[i + 1]) setEmoji = args[++i];
+    else if (args[i] === "--presence" && args[i + 1]) presence = args[++i];
+    else if (args[i] === "--clear") clear = true;
+    i++;
+  }
+
+  if (platform === "slack") {
+    printJSON(await slackStatus(platformConfig.token, { set: setStatus, emoji: setEmoji, presence, clear }));
+  } else {
+    printJSON(await discordStatus(platformConfig.token, { set: setStatus, presence, clear }));
+  }
+}
+
+// =============================================================================
+// SECTION 8: Briefing
+// =============================================================================
+
+async function generateBriefing(): Promise<void> {
+  if (!configExists()) {
+    process.stdout.write(JSON.stringify({}) + "\n");
+    return;
+  }
+
+  const config = loadConfig();
+
+  if (!config.briefing.enabled) {
+    process.stdout.write(JSON.stringify({}) + "\n");
+    return;
+  }
+
+  const result: Record<string, unknown> = {};
+
+  if (config.platforms.slack.enabled && config.platforms.slack.token) {
+    try {
+      result.slack = await Promise.race([
+        slackBriefing(config.platforms.slack.token, config.briefing),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 4500)),
+      ]);
+    } catch {
+      result.warning = result.warning ? `${result.warning},slack_unavailable` : "slack_unavailable";
+    }
+  }
+
+  if (config.platforms.discord.enabled && config.platforms.discord.token) {
+    try {
+      result.discord = await Promise.race([
+        discordBriefing(config.platforms.discord.token, config.platforms.discord.guilds ?? []),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 4500)),
+      ]);
+    } catch {
+      result.warning = result.warning ? `${result.warning},discord_unavailable` : "discord_unavailable";
+    }
+  }
+
+  result.save_directory = config.save_directory;
+  printJSON(result);
+}
