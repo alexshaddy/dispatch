@@ -386,3 +386,146 @@ async function slackBriefing(token: string, config: Config["briefing"]): Promise
 
   return { unread_count: totalUnread, unread_by_channel: unreadByChannel, mentions: [], dms };
 }
+
+// =============================================================================
+// SECTION 6: Discord Adapter
+// =============================================================================
+
+function discordAuthHeader(token: string): Record<string, string> {
+  return { Authorization: `Bot ${token}` };
+}
+
+function normalizeDiscordMessage(msg: Record<string, unknown>, channelName: string): MessageObject {
+  const author = (msg.author as Record<string, unknown> | undefined) ?? {};
+  return {
+    id: String(msg.id ?? ""),
+    author: {
+      name: String(author.global_name ?? author.username ?? "Unknown"),
+      username: String(author.username ?? ""),
+    },
+    content: String(msg.content ?? ""),
+    timestamp: String(msg.timestamp ?? ""),
+    channel: channelName,
+    thread_id: (msg.thread as Record<string, unknown> | undefined)?.id
+      ? String((msg.thread as Record<string, unknown>).id)
+      : null,
+    reply_count: 0,
+    reactions: ((msg.reactions as Array<{ emoji: { name: string }; count: number }>) ?? []).map((r) => ({
+      emoji: r.emoji?.name ?? "",
+      count: r.count,
+    })),
+    has_attachments: Array.isArray(msg.attachments) && (msg.attachments as unknown[]).length > 0,
+    platform: "discord",
+  };
+}
+
+async function discordList(token: string, channel: string, limit: number, threadId?: string): Promise<MessageObject[]> {
+  // channel can be a channel ID or name — Discord API requires channel ID
+  // If it looks like a name (not numeric), we need to search guilds
+  let channelId = channel;
+  let channelName = channel;
+
+  if (!/^\d+$/.test(channel)) {
+    // Try to resolve from guild channels
+    // Without a guild ID we can't enumerate; advise using channel ID
+    exitWithError("channel_not_found", `Discord requires a channel ID (numeric). Got: '${channel}'. Use the channel's ID from Discord.`);
+  }
+
+  const endpoint = threadId
+    ? `https://discord.com/api/v10/channels/${threadId}/messages?limit=${limit}`
+    : `https://discord.com/api/v10/channels/${channelId}/messages?limit=${limit}`;
+
+  const messages = await fetchJSON<Array<Record<string, unknown>>>(
+    endpoint,
+    { headers: discordAuthHeader(token) }
+  );
+
+  return messages.map((m) => normalizeDiscordMessage(m, channelName));
+}
+
+async function discordRead(token: string, messageId: string): Promise<MessageObject & { thread_replies?: MessageObject[] }> {
+  // messageId format: "channelId:messageId"
+  const parts = messageId.split(":");
+  if (parts.length < 2) exitWithError("message_not_found", `Invalid Discord message ID format. Expected 'channelId:messageId'. Got: ${messageId}`);
+
+  const [channelId, msgId] = parts;
+
+  const msg = await fetchJSON<Record<string, unknown>>(
+    `https://discord.com/api/v10/channels/${channelId}/messages/${msgId}`,
+    { headers: discordAuthHeader(token) }
+  );
+
+  const normalized = normalizeDiscordMessage(msg, channelId);
+
+  // Check if this message has a thread
+  const thread = (msg.thread as Record<string, unknown> | undefined);
+  let replies: MessageObject[] = [];
+  if (thread?.id) {
+    const threadMessages = await fetchJSON<Array<Record<string, unknown>>>(
+      `https://discord.com/api/v10/channels/${thread.id}/messages?limit=100`,
+      { headers: discordAuthHeader(token) }
+    );
+    replies = threadMessages.map((m) => normalizeDiscordMessage(m, String(thread.id)));
+  }
+
+  return { ...normalized, thread_replies: replies };
+}
+
+async function discordSend(token: string, channelId: string, text: string, threadId?: string): Promise<{ status: string; platform: string; channel: string; message_id: string }> {
+  const body: Record<string, unknown> = { content: text };
+  if (threadId) body.message_reference = { message_id: threadId };
+
+  const resp = await fetchJSON<{ id: string; content: string }>(
+    `https://discord.com/api/v10/channels/${channelId}/messages`,
+    { method: "POST", headers: discordAuthHeader(token), body }
+  );
+
+  return { status: "sent", platform: "discord", channel: channelId, message_id: String(resp.id) };
+}
+
+async function discordSearch(token: string, query: string, channelId?: string, fromUser?: string, limit = 20): Promise<MessageObject[]> {
+  // Discord REST API has no full-text search — client-side substring match on fetched messages
+  if (!channelId) exitWithError("channel_not_specified", "Discord search requires --channel <channel-id>. Discord's API does not support workspace-wide search.");
+
+  const messages = await fetchJSON<Array<Record<string, unknown>>>(
+    `https://discord.com/api/v10/channels/${channelId}/messages?limit=${Math.min(limit * 5, 100)}`,
+    { headers: discordAuthHeader(token) }
+  );
+
+  let normalized = messages.map((m) => normalizeDiscordMessage(m, channelId));
+
+  // Client-side filtering
+  const lowerQuery = query.toLowerCase();
+  normalized = normalized.filter((m) => m.content.toLowerCase().includes(lowerQuery));
+  if (fromUser) normalized = normalized.filter((m) => m.author.username.toLowerCase().includes(fromUser.toLowerCase()));
+
+  return normalized.slice(0, limit);
+}
+
+async function discordStatus(token: string, flags: { set?: string; presence?: string; clear?: boolean }): Promise<Record<string, unknown>> {
+  // Discord bot tokens cannot set presence or status via REST API — requires Gateway (WebSocket)
+  // Deferred to future version (WebSocket/Gateway support)
+  return {
+    platform: "discord",
+    presence: null,
+    status_text: null,
+    status_emoji: null,
+    dnd: null,
+    warning: "discord_status_requires_gateway",
+    warning_message: "Setting Discord status requires WebSocket Gateway — deferred to future version.",
+  };
+}
+
+async function discordBriefing(token: string, guildIds: string[]): Promise<Record<string, unknown>> {
+  // Discord's REST API has no unread count endpoint — return 0 with a note
+  // We can list DMs (DM channels) for the bot user
+  const unreadByChannel: Record<string, number> = {};
+
+  return {
+    unread_count: 0,
+    unread_by_channel: unreadByChannel,
+    mentions: [],
+    dms: [],
+    note: "Discord unread counts require Gateway connection — deferred to future version.",
+  };
+}
