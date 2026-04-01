@@ -120,3 +120,63 @@ function resolveChannel(arg: string | null, platform: string, config: Config): s
   if (platformConfig.default_channel) return platformConfig.default_channel;
   exitWithError("channel_not_specified", `Specify a channel or set a default with chat-config --set platforms.${platform}.default_channel <channel>`);
 }
+
+// =============================================================================
+// SECTION 4: HTTP Helpers
+// =============================================================================
+
+interface FetchJSONOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: unknown;
+  timeoutMs?: number;
+}
+
+async function fetchJSON<T>(url: string, options: FetchJSONOptions = {}): Promise<T> {
+  // HTTPS enforcement
+  if (!url.startsWith("https://")) {
+    exitWithError("network_error", `Only HTTPS URLs are allowed. Got: ${url}`);
+  }
+
+  const { method = "GET", headers = {}, body, timeoutMs = 10000 } = options;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json", ...headers },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (err: unknown) {
+    clearTimeout(timeout);
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes("abort")) {
+      exitWithError("network_error", `Request timed out after ${timeoutMs}ms: ${url}`);
+    }
+    exitWithError("network_error", `Network request failed: ${message}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  // Rate limit handling
+  if (response.status === 429) {
+    const retryAfter = parseInt(response.headers.get("retry-after") ?? "60");
+    exitWithError("rate_limited", `Rate limited. Retry after ${retryAfter} seconds.`, { retry_after: retryAfter });
+  }
+
+  // Auth errors
+  if (response.status === 401 || response.status === 403) {
+    exitWithError("token_invalid", "API returned 401/403 — token may be expired or revoked. Run chat-config --wizard to update your token.");
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "unknown error");
+    exitWithError("network_error", `API returned ${response.status}: ${errorText}`);
+  }
+
+  return response.json() as Promise<T>;
+}
