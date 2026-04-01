@@ -270,8 +270,8 @@ async function slackRead(token: string, messageId: string): Promise<MessageObjec
 
   if (!resp.ok || !resp.messages?.length) exitWithError("message_not_found", `Message '${messageId}' not found.`);
 
-  const parent = normalizeSlackMessage(resp.messages[0], channelId);
-  const replies = resp.messages.slice(1).map((m) => normalizeSlackMessage(m, channelId));
+  const parent = normalizeSlackMessage(resp.messages[0], `channel:${channelId}`);
+  const replies = resp.messages.slice(1).map((m) => normalizeSlackMessage(m, `channel:${channelId}`));
 
   return { ...parent, thread_replies: replies };
 }
