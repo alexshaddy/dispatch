@@ -4,8 +4,11 @@ set -euo pipefail
 SCRIPT_DIR="${CLAUDE_PLUGIN_ROOT}/scripts"
 CONFIG_FILE="$HOME/.config/dispatch/config.json"
 
-# Exit silently if not configured
-[ -f "$CONFIG_FILE" ] || exit 0
+# Output fallback message if not configured
+if [ ! -f "$CONFIG_FILE" ]; then
+    python3 -c "import json; print(json.dumps({'hookSpecificOutput':{'hookEventName':'SessionStart','additionalContext':'Dispatch: Not configured — run /chat-config --wizard to set up.'}}))"
+    exit 0
+fi
 
 # Check if briefing is enabled
 BRIEFING_ENABLED=$(python3 -c "
@@ -17,7 +20,10 @@ except:
     print('false')
 " 2>/dev/null)
 
-[ "$BRIEFING_ENABLED" = "true" ] || exit 0
+if [ "$BRIEFING_ENABLED" != "true" ]; then
+    python3 -c "import json; print(json.dumps({'hookSpecificOutput':{'hookEventName':'SessionStart','additionalContext':'Dispatch: Messaging briefing not enabled — run /chat-config --wizard to enable.'}}))"
+    exit 0
+fi
 
 # Determine which timeout command to use (macOS compatibility)
 TIMEOUT_CMD=$(command -v gtimeout || command -v timeout || echo "")
