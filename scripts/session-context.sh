@@ -36,10 +36,10 @@ else
 fi
 
 # If save_directory is configured, save briefing to disk
-SAVE_DIR=$(python3 -c "
-import json
+SAVE_DIR=$(DISPATCH_DATA="$BRIEFING_JSON" python3 -c "
+import json, os
 try:
-    data = json.loads('''$BRIEFING_JSON''')
+    data = json.loads(os.environ.get('DISPATCH_DATA', '{}'))
     print(data.get('save_directory', ''))
 except:
     print('')
@@ -53,13 +53,13 @@ if [ -n "$SAVE_DIR" ]; then
 fi
 
 # Format output as markdown
-python3 -c "
+DISPATCH_DATA="$BRIEFING_JSON" python3 -c "
 import json, sys, os
 
 root = os.environ.get('CLAUDE_PLUGIN_ROOT', '')
 
 try:
-    data = json.loads('''$BRIEFING_JSON''')
+    data = json.loads(os.environ.get('DISPATCH_DATA', '{}'))
 except:
     data = {}
 
@@ -114,7 +114,7 @@ if 'discord_unavailable' in warning:
     lines.append('  ⚠ Discord: API unavailable (token expired or network error)')
 
 if not lines:
-    content = ''
+    content = 'Dispatch plugin root: ' + root + '\n\nDispatch: No unread messages or activity.'
 else:
     content = 'Dispatch plugin root: ' + root + '\n\n' + '\n'.join(lines)
 
