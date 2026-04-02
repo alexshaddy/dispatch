@@ -1,7 +1,58 @@
-# Standard the-grounds TS/Bun template
-node_modules/
+# Secrets and credentials — NEVER commit these
 .env
-*.log
+.env.*
+!.env.example
+*.local
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.csr
+*.secret
+*credentials*
+*secrets*
+*.age
+age-key*
 
-# Local dev docs — never publish
+# OS artifacts
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editor and IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+*.code-workspace
+
+# Claude Code and project internals
+.claude/
 CLAUDE.md
+.context/
+.tracker/
+.superpowers/
+
+# Runtime and temp
+/tmp/
+*.tmp
+*.bak
+*.orig
+*.log
+logs/
+
+# Archives
+*.zip
+
+# Node / Bun
+node_modules/
