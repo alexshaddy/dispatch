@@ -6,7 +6,7 @@ You have access to Dispatch, a Slack and Discord integration for Claude Code.
 
 When the morning briefing protocol fires (MORNING_BRIEFING_TRIGGER in SessionStart context):
 
-The SessionStart hook already runs `dispatch briefing` via `session-context.sh` and injects the result into the session context. Check the session start output first — if Dispatch data is already present, do NOT re-fetch it.
+Run `bun run dispatch.ts briefing` to fetch fresh messaging state.
 
 Surface the Dispatch section of the briefing as item 11 (Messaging) in the CLI output:
 - **Slack:** unread count by channel, mention count, DM count and snippets
