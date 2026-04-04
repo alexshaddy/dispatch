@@ -2,6 +2,10 @@
 // Dispatch — Slack and Discord integration for Claude Code
 // Run: bun run scripts/dispatch.ts <subcommand> [args]
 
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
+
 // =============================================================================
 // SECTION 1: Version
 // =============================================================================
@@ -24,10 +28,6 @@ function exitWithError(code: string, message: string, extra?: Record<string, unk
 // =============================================================================
 // SECTION 3: Config
 // =============================================================================
-
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
 
 const CONFIG_DIR = join(homedir(), ".config", "dispatch");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
@@ -104,7 +104,7 @@ function configExists(): boolean {
 }
 
 function maskToken(token: string): string {
-  if (!token || token.length < 12) return "****";
+  if (!token || token.length < 14) return "****";
   return token.substring(0, 6) + "..." + token.slice(-4);
 }
 
@@ -616,14 +616,14 @@ async function dispatchList(args: string[]): Promise<void> {
 
   if (platform === "slack") {
     const messages = await slackList(platformConfig.token, channel, finalLimit, finalUnread, threadId ?? undefined);
-    if (unreadOnly) {
+    if (finalUnread) {
       printJSON({ messages, note: "unread filtering not yet implemented" });
     } else {
       printJSON(messages);
     }
   } else {
     const messages = await discordList(platformConfig.token, channel, finalLimit, threadId ?? undefined);
-    if (unreadOnly) {
+    if (finalUnread) {
       printJSON({ messages, note: "unread filtering not yet implemented" });
     } else {
       printJSON(messages);
@@ -807,11 +807,11 @@ function runConfig(args: string[]): void {
     return;
   }
 
-  const getIdx = args.indexOf("--get");
-  if (getIdx !== -1 && args[getIdx + 1]) {
+  const getKey = extractFlag(args, "--get");
+  if (getKey !== null) {
     if (!configExists()) exitWithError("not_configured", "Run chat-config --wizard to set up Dispatch.");
     const config = loadConfig();
-    const key = args[getIdx + 1];
+    const key = getKey;
     const parts = key.split(".");
     let value: unknown = config;
     for (const part of parts) value = (value as Record<string, unknown>)[part];
@@ -850,11 +850,11 @@ function runConfig(args: string[]): void {
     return;
   }
 
-  const enableIdx = args.indexOf("--enable");
-  if (enableIdx !== -1 && args[enableIdx + 1]) {
+  const enablePlatform = extractFlag(args, "--enable");
+  if (enablePlatform !== null) {
     if (!configExists()) exitWithError("not_configured", "Run chat-config --wizard to set up Dispatch.");
     const config = loadConfig();
-    const platform = args[enableIdx + 1] as "slack" | "discord";
+    const platform = enablePlatform as "slack" | "discord";
     if (platform !== "slack" && platform !== "discord") exitWithError("platform_not_specified", `Unknown platform: ${platform}`);
     config.platforms[platform].enabled = true;
     saveConfig(config);
@@ -862,11 +862,11 @@ function runConfig(args: string[]): void {
     return;
   }
 
-  const disableIdx = args.indexOf("--disable");
-  if (disableIdx !== -1 && args[disableIdx + 1]) {
+  const disablePlatform = extractFlag(args, "--disable");
+  if (disablePlatform !== null) {
     if (!configExists()) exitWithError("not_configured", "Run chat-config --wizard to set up Dispatch.");
     const config = loadConfig();
-    const platform = args[disableIdx + 1] as "slack" | "discord";
+    const platform = disablePlatform as "slack" | "discord";
     if (platform !== "slack" && platform !== "discord") exitWithError("platform_not_specified", `Unknown platform: ${platform}`);
     config.platforms[platform].enabled = false;
     saveConfig(config);
