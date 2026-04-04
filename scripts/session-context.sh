@@ -11,10 +11,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 # Check if briefing is enabled
-BRIEFING_ENABLED=$(python3 -c "
-import json
+BRIEFING_ENABLED=$(CONFIG_FILE_PATH="$CONFIG_FILE" python3 -c "
+import json, os
 try:
-    config = json.load(open('$CONFIG_FILE'))
+    config = json.load(open(os.environ['CONFIG_FILE_PATH']))
     print('true' if config.get('briefing', {}).get('enabled', True) else 'false')
 except:
     print('false')
@@ -35,12 +35,12 @@ else
     BRIEFING_JSON=$(bun run "$SCRIPT_DIR/dispatch.ts" briefing 2>/dev/null || echo '{}')
 fi
 
-# If save_directory is configured, save briefing to disk
-SAVE_DIR=$(DISPATCH_DATA="$BRIEFING_JSON" python3 -c "
+# Read save_directory directly from config so a briefing timeout cannot lose it
+SAVE_DIR=$(CONFIG_FILE_PATH="$CONFIG_FILE" python3 -c "
 import json, os
 try:
-    data = json.loads(os.environ.get('DISPATCH_DATA', '{}'))
-    print(data.get('save_directory', ''))
+    config = json.load(open(os.environ['CONFIG_FILE_PATH']))
+    print(config.get('save_directory', ''))
 except:
     print('')
 " 2>/dev/null)
@@ -98,7 +98,8 @@ if slack and isinstance(slack, dict):
         lines.append(f'  DM: {frm}: \"{snippet}\"')
 
 discord = data.get('discord', {})
-if discord and isinstance(discord, dict):
+# Only show Discord block if it has real data (not just the Gateway-deferred stub with 0 unread)
+if discord and isinstance(discord, dict) and not discord.get('note', '').startswith('Discord unread counts require Gateway'):
     unread = discord.get('unread_count', 0)
     by_channel = discord.get('unread_by_channel', {})
     channel_str = ', '.join(f'{k}: {v}' for k, v in list(by_channel.items())[:5])

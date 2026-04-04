@@ -4,5 +4,28 @@
   "description": "Slack and Discord integration for Claude Code — read, search, and send messages without leaving the terminal",
   "author": { "name": "alexshaddy" },
   "license": "MIT",
-  "keywords": ["slack", "discord", "messaging", "chat", "notifications"]
+  "keywords": ["slack", "discord", "messaging", "chat", "notifications"],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/session-context.sh\"",
+            "timeout": 5000,
+            "statusMessage": "Loading messages..."
+          }
+        ]
+      }
+    ]
+  },
+  "commands": [
+    "chat-config",
+    "chat-list",
+    "chat-read",
+    "chat-search",
+    "chat-send",
+    "chat-status"
+  ]
 }

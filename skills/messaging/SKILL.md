@@ -6,7 +6,7 @@ You have access to Dispatch, a Slack and Discord integration for Claude Code.
 
 When the morning briefing protocol fires (MORNING_BRIEFING_TRIGGER in SessionStart context):
 
-Run `bun run dispatch.ts briefing` to fetch fresh messaging state.
+Run `bun run "${CLAUDE_PLUGIN_ROOT}/scripts/dispatch.ts" briefing` to fetch fresh messaging state.
 
 Surface the Dispatch section of the briefing as item 11 (Messaging) in the CLI output:
 - **Slack:** unread count by channel, mention count, DM count and snippets

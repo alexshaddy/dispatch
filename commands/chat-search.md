@@ -1,6 +1,6 @@
 ---
 description: Search message history (full-text on Slack; client-side substring on Discord)
-argument-hint: [slack|discord] <query> [--channel <name>] [--from <user>] [--date-from YYYY-MM-DD] [--date-to YYYY-MM-DD]
+argument-hint: [slack|discord] <query> [--channel <name>] [--from-user <user>] [--date-from YYYY-MM-DD] [--date-to YYYY-MM-DD]
 allowed-tools: Bash(*dispatch*)
 ---
 
@@ -11,7 +11,7 @@ Search message history.
 - `[slack|discord]`: Optional platform override.
 - `<query>`: Required. Search text.
 - `--channel <name>`: Filter to a specific channel.
-- `--from <user>`: Filter by author username.
+- `--from-user <user>`: Filter by author username.
 - `--date-from <YYYY-MM-DD>`: Start date (Slack only).
 - `--date-to <YYYY-MM-DD>`: End date (Slack only).
 - `--limit <N>`: Max results.
@@ -21,7 +21,7 @@ Search message history.
 **Step 2: Run the command**
 
 ```
-bun run "${CLAUDE_PLUGIN_ROOT}/scripts/dispatch.ts" search [slack|discord] "<query>" [--channel <name>] [--from <user>] [--date-from <date>] [--date-to <date>] [--limit <N>]
+bun run "${CLAUDE_PLUGIN_ROOT}/scripts/dispatch.ts" search [slack|discord] "<query>" [--channel <name>] [--from-user <user>] [--date-from <date>] [--date-to <date>] [--limit <N>]
 ```
 
 **Step 3: Format output**

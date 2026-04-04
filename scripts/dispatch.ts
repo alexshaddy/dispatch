@@ -25,7 +25,7 @@ function exitWithError(code: string, message: string, extra?: Record<string, unk
 // SECTION 3: Config
 // =============================================================================
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync, unlinkSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -86,7 +86,11 @@ function loadConfig(): Config {
   if (!existsSync(CONFIG_FILE)) {
     exitWithError("not_configured", "Run chat-config --wizard to set up Dispatch.");
   }
-  return JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as Config;
+  try {
+    return JSON.parse(readFileSync(CONFIG_FILE, "utf8")) as Config;
+  } catch {
+    exitWithError("config_invalid", `Config file at ${CONFIG_FILE} is not valid JSON. Delete it and re-run chat-config --wizard.`);
+  }
 }
 
 function saveConfig(config: Config): void {
@@ -101,7 +105,7 @@ function configExists(): boolean {
 
 function maskToken(token: string): string {
   if (!token || token.length < 12) return "****";
-  return token.substring(0, 6) + "****..." + "****" + token.slice(-4);
+  return token.substring(0, 6) + "..." + token.slice(-4);
 }
 
 /** Resolve platform: explicit arg > default_platform config > error */
@@ -143,7 +147,7 @@ async function fetchJSON<T>(url: string, options: FetchJSONOptions = {}): Promis
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-  let response: Response;
+  let response: Response | null = null;
   try {
     response = await fetch(url, {
       method,
@@ -160,6 +164,10 @@ async function fetchJSON<T>(url: string, options: FetchJSONOptions = {}): Promis
     exitWithError("network_error", `Network request failed: ${message}`);
   } finally {
     clearTimeout(timeout);
+  }
+
+  if (!response) {
+    exitWithError("network_error", `No response received from ${url}`);
   }
 
   // Rate limit handling
@@ -227,8 +235,10 @@ function normalizeSlackMessage(msg: Record<string, unknown>, channelName: string
   };
 }
 
-async function slackList(token: string, channel: string, limit: number, unreadOnly: boolean, threadId?: string): Promise<MessageObject[]> {
-  // Resolve channel ID if needed
+async function slackList(token: string, channel: string, limit: number, unreadOnly: boolean, threadId?: string): Promise<MessageObject[] | { messages: MessageObject[]; channels_note: string }> {
+  // Hard cap: conversations.list returns at most 200 channels per request.
+  // Pagination (cursor-based) is not yet implemented — workspaces with >200 channels
+  // may not have the requested channel in this result set.
   const channelsResp = await fetchJSON<{ ok: boolean; channels: Array<{ id: string; name: string }> }>(
     "https://slack.com/api/conversations.list?limit=200&types=public_channel,private_channel",
     { headers: slackAuthHeader(token) }
@@ -253,7 +263,12 @@ async function slackList(token: string, channel: string, limit: number, unreadOn
 
   // Simple unread simulation: Slack Web API doesn't expose per-channel unread without marks
   // We return all messages and note in the response that unread filtering is approximate
-  return messages.slice(0, limit);
+  const sliced = messages.slice(0, limit);
+
+  if (limit >= 200) {
+    return { messages: sliced, channels_note: "Results limited to first 200 channels. Pagination not yet implemented." };
+  }
+  return sliced;
 }
 
 async function slackRead(token: string, messageId: string): Promise<MessageObject & { thread_replies?: MessageObject[] }> {
@@ -473,6 +488,10 @@ async function discordRead(token: string, messageId: string): Promise<MessageObj
 
 async function discordSend(token: string, channelId: string, text: string, threadId?: string): Promise<{ status: string; platform: string; channel: string; message_id: string }> {
   const body: Record<string, unknown> = { content: text };
+  // TODO (C7): Verify correct Discord API field for thread replies.
+  // `message_reference` creates a reply-mention; for posting into a thread channel,
+  // the correct approach may be to use the thread's channel ID directly.
+  // Needs external API verification before changing.
   if (threadId) body.message_reference = { message_id: threadId };
 
   const resp = await fetchJSON<{ id: string; content: string }>(
@@ -534,6 +553,18 @@ async function discordBriefing(token: string, guildIds: string[]): Promise<Recor
 // SECTION 7: Unified Dispatch
 // =============================================================================
 
+function extractFlag(args: string[], flag: string): string | null {
+  const i = args.indexOf(flag);
+  return i !== -1 && args[i + 1] ? args[i + 1] : null;
+}
+
+function requirePlatform(platform: string, config: Config): PlatformConfig {
+  const cfg = config.platforms[platform as "slack" | "discord"];
+  if (!cfg?.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled. Run chat-config --enable ${platform} and provide a token.`);
+  if (!cfg?.token) exitWithError("platform_not_configured", `No token configured for '${platform}'. Run chat-config --wizard.`);
+  return cfg;
+}
+
 function parseCommonArgs(args: string[]): {
   platform: string | null;
   channel: string | null;
@@ -577,10 +608,7 @@ async function dispatchList(args: string[]): Promise<void> {
   const { platform: platformArg, channel: channelArg, limit, unreadOnly, threadId, remaining } = parseCommonArgs(args);
 
   const platform = resolvePlatform(platformArg, config);
-  const platformConfig = config.platforms[platform as "slack" | "discord"];
-
-  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled. Run chat-config --enable ${platform} and provide a token.`);
-  if (!platformConfig.token) exitWithError("platform_not_enabled", `Platform '${platform}' has no token configured. Run chat-config --wizard.`);
+  const platformConfig = requirePlatform(platform, config);
 
   const channel = resolveChannel(channelArg ?? remaining[0] ?? null, platform, config);
   const finalLimit = limit ?? config.default_limit;
@@ -588,10 +616,18 @@ async function dispatchList(args: string[]): Promise<void> {
 
   if (platform === "slack") {
     const messages = await slackList(platformConfig.token, channel, finalLimit, finalUnread, threadId ?? undefined);
-    printJSON(messages);
+    if (unreadOnly) {
+      printJSON({ messages, note: "unread filtering not yet implemented" });
+    } else {
+      printJSON(messages);
+    }
   } else {
     const messages = await discordList(platformConfig.token, channel, finalLimit, threadId ?? undefined);
-    printJSON(messages);
+    if (unreadOnly) {
+      printJSON({ messages, note: "unread filtering not yet implemented" });
+    } else {
+      printJSON(messages);
+    }
   }
 }
 
@@ -600,9 +636,7 @@ async function dispatchRead(args: string[]): Promise<void> {
   const { platform: platformArg, remaining } = parseCommonArgs(args);
 
   const platform = resolvePlatform(platformArg, config);
-  const platformConfig = config.platforms[platform as "slack" | "discord"];
-
-  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled.`);
+  const platformConfig = requirePlatform(platform, config);
 
   const messageId = remaining[0];
   if (!messageId) exitWithError("message_not_found", "Message ID is required. Usage: chat-read [platform] <message-id>");
@@ -620,9 +654,7 @@ async function dispatchSend(args: string[]): Promise<void> {
 
   const confirmed = args.includes("--confirmed");
   const platform = resolvePlatform(platformArg, config);
-  const platformConfig = config.platforms[platform as "slack" | "discord"];
-
-  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled.`);
+  const platformConfig = requirePlatform(platform, config);
 
   // Channel: either from --channel flag or first positional remaining arg
   let channelArg = channelArgFlag ?? null;
@@ -660,25 +692,19 @@ async function dispatchSearch(args: string[]): Promise<void> {
   const config = loadConfig();
   const { platform: platformArg, channel: channelArgFlag, limit, remaining } = parseCommonArgs(args);
 
-  let fromUser: string | null = null;
-  let dateFrom: string | null = null;
-  let dateTo: string | null = null;
+  const fromUser: string | null = extractFlag(remaining, "--from-user");
+  const dateFrom: string | null = extractFlag(remaining, "--from");
+  const dateTo: string | null = extractFlag(remaining, "--to");
   let channelArg = channelArgFlag;
-  const pureRemaining: string[] = [];
-
-  let i = 0;
-  while (i < remaining.length) {
-    if (remaining[i] === "--from" && remaining[i + 1]) dateFrom = remaining[++i];
-    else if (remaining[i] === "--to" && remaining[i + 1]) dateTo = remaining[++i];
-    else if (remaining[i] === "--from-user" && remaining[i + 1]) fromUser = remaining[++i];
-    else pureRemaining.push(remaining[i]);
-    i++;
-  }
+  const pureRemaining: string[] = remaining.filter((_, idx, arr) => {
+    const prev = arr[idx - 1];
+    if (prev === "--from-user" || prev === "--from" || prev === "--to") return false;
+    if (arr[idx] === "--from-user" || arr[idx] === "--from" || arr[idx] === "--to") return false;
+    return true;
+  });
 
   const platform = resolvePlatform(platformArg, config);
-  const platformConfig = config.platforms[platform as "slack" | "discord"];
-
-  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled.`);
+  const platformConfig = requirePlatform(platform, config);
 
   const query = pureRemaining.join(" ");
   if (!query) exitWithError("network_error", "Search query is required. Usage: chat-search [platform] <query> [--channel <name>]");
@@ -697,23 +723,12 @@ async function dispatchStatus(args: string[]): Promise<void> {
   const { platform: platformArg, remaining } = parseCommonArgs(args);
 
   const platform = resolvePlatform(platformArg, config);
-  const platformConfig = config.platforms[platform as "slack" | "discord"];
+  const platformConfig = requirePlatform(platform, config);
 
-  if (!platformConfig.enabled) exitWithError("platform_not_enabled", `Platform '${platform}' is not enabled.`);
-
-  let setStatus: string | undefined;
-  let setEmoji: string | undefined;
-  let presence: string | undefined;
-  let clear = false;
-
-  let i = 0;
-  while (i < args.length) {
-    if (args[i] === "--set" && args[i + 1]) setStatus = args[++i];
-    else if (args[i] === "--emoji" && args[i + 1]) setEmoji = args[++i];
-    else if (args[i] === "--presence" && args[i + 1]) presence = args[++i];
-    else if (args[i] === "--clear") clear = true;
-    i++;
-  }
+  const setStatus = extractFlag(args, "--set") ?? undefined;
+  const setEmoji = extractFlag(args, "--emoji") ?? undefined;
+  const presence = extractFlag(args, "--presence") ?? undefined;
+  const clear = args.includes("--clear");
 
   if (platform === "slack") {
     printJSON(await slackStatus(platformConfig.token, { set: setStatus, emoji: setEmoji, presence, clear }));
@@ -787,7 +802,6 @@ function runConfig(args: string[]): void {
     if (!args.includes("--confirm")) {
       exitWithError("not_configured", "--reset requires --confirm to prevent accidental token/config deletion.");
     }
-    const { unlinkSync } = require("fs");
     if (existsSync(CONFIG_FILE)) unlinkSync(CONFIG_FILE);
     printJSON({ status: "reset", message: "Config wiped. Run chat-config --wizard to set up Dispatch." });
     return;
@@ -819,7 +833,11 @@ function runConfig(args: string[]): void {
     const parts = key.split(".");
     let target: Record<string, unknown> = config as unknown as Record<string, unknown>;
     for (let i = 0; i < parts.length - 1; i++) {
-      target = target[parts[i]] as Record<string, unknown>;
+      const next = target[parts[i]];
+      if (typeof next !== "object" || next === null || Array.isArray(next)) {
+        exitWithError("config_invalid", `Cannot set '${key}': '${parts.slice(0, i + 1).join(".")}' is not an object.`);
+      }
+      target = next as Record<string, unknown>;
     }
     const lastKey = parts[parts.length - 1];
     const existing = target[lastKey];
